@@ -1,18 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { MOCK_REQUESTS } from "../mockData";
+import { useMsal, useIsAuthenticated } from "@azure/msal-react";
+import { loginRequest } from "../auth/msalConfig";
+import { getRequest, updateRequest } from "../api/requests";
+import { getVal } from "../types";
 import type { WorkNote } from "../types";
 
 const STATES = ["Open", "In Progress", "Pending Approval", "Completed", "Cancelled"];
-
-function getApprovalColor(status: string): string {
-  switch (status) {
-    case "Pending":  return "#EF9F27";
-    case "Approved": return "#639922";
-    case "Rejected": return "#E24B4A";
-    default:         return "#9CA3AF";
-  }
-}
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
@@ -30,86 +24,176 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function RequestDetail() {
-  const { id } = useParams();
-  const navigate = useNavigate();
+function getApprovalColor(status: string): string {
+  switch (status) {
+    case "Pending":  return "#EF9F27";
+    case "Approved": return "#639922";
+    case "Rejected": return "#E24B4A";
+    default:         return "#9CA3AF";
+  }
+}
 
-  const original = MOCK_REQUESTS.find(r => r.Id === Number(id));
-  const [request, setRequest] = useState(original ? { ...original } : null);
-  const [selectedState, setSelectedState] = useState(original?.State.Value ?? "Open");
-  const [noteText, setNoteText] = useState("");
-  const [workNotes, setWorkNotes] = useState<WorkNote[]>([]);
-  const [saved, setSaved] = useState(false);
-  const [approvalAction, setApprovalAction] = useState<"approve" | "reject" | null>(null);
-  const [actionNote, setActionNote] = useState("");
+export default function RequestDetail() {
+  const { id }      = useParams();
+  const navigate    = useNavigate();
+  const { instance, accounts } = useMsal();
+  const isAuthenticated = useIsAuthenticated();
+
+  const [request,       setRequest]       = useState<any>(null);
+  const [loading,       setLoading]       = useState(true);
+  const [error,         setError]         = useState("");
+  const [selectedState, setSelectedState] = useState("Open");
+  const [noteText,      setNoteText]      = useState("");
+  const [workNotes,     setWorkNotes]     = useState<WorkNote[]>([]);
+  const [saved,         setSaved]         = useState(false);
+  const [saving,        setSaving]        = useState(false);
+  const [approvalAction, setApprovalAction] = useState<"approve"|"reject"|null>(null);
+  const [actionNote,    setActionNote]    = useState("");
+
+  useEffect(() => {
+    const account = instance.getActiveAccount() || accounts[0];
+    if (isAuthenticated && account && id) {
+      loadRequest();
+    }
+  }, [isAuthenticated, id]);
+
+  async function getToken() {
+    const account = instance.getActiveAccount() || accounts[0];
+    const response = await instance.acquireTokenSilent({
+      ...loginRequest,
+      account,
+    });
+    return response.accessToken;
+  }
+
+  async function loadRequest() {
+    setLoading(true);
+    setError("");
+    try {
+      const token = await getToken();
+      const data  = await getRequest(Number(id), token);
+      setRequest(data);
+      setSelectedState(getVal(data.State) || "Open");
+    } catch (e) {
+      setError("Failed to load request — " + String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function showSaved() {
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   }
 
-  function handleUpdateState() {
-    setRequest(prev =>
-      prev ? { ...prev, State: { Value: selectedState } } : prev
-    );
-    showSaved();
+  async function handleUpdateState() {
+    setSaving(true);
+    try {
+      const token = await getToken();
+      await updateRequest(request.Id, { State: selectedState }, token);
+      setRequest((prev: any) => ({ ...prev, State: selectedState }));
+      showSaved();
+    } catch (e) {
+      setError("Failed to update — " + String(e));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleAddNote() {
     if (!noteText.trim()) return;
     const note: WorkNote = {
       Id: workNotes.length + 1,
-      Title: "Note on " + (request ? request.REQ_Number : ""),
-      RecordNumber: request ? request.REQ_Number : "",
+      Title: "Note on " + (request?.REQ_Number ?? ""),
+      RecordNumber: request?.REQ_Number ?? "",
       Note: noteText.trim(),
-      AddedBy: { Title: "Kedir Hassen" },
+      AddedBy: { Title: accounts[0]?.name ?? "Kedir Hassen" },
       Created: new Date().toISOString(),
     };
     setWorkNotes(prev => [note, ...prev]);
     setNoteText("");
   }
 
-  function handleApprove() {
-    setRequest(prev =>
-      prev ? { ...prev, ApprovalStatus: { Value: "Approved" },
-        State: { Value: "In Progress" } } : prev
-    );
-    setSelectedState("In Progress");
-    setApprovalAction(null);
-    setActionNote("");
-    showSaved();
+  async function handleApprove() {
+    setSaving(true);
+    try {
+      const token = await getToken();
+      await updateRequest(
+        request.Id,
+        { ApprovalStatus: "Approved", State: "In Progress" },
+        token
+      );
+      setRequest((prev: any) => ({
+        ...prev,
+        ApprovalStatus: "Approved",
+        State: "In Progress",
+      }));
+      setSelectedState("In Progress");
+      setApprovalAction(null);
+      showSaved();
+    } catch (e) {
+      setError("Failed to approve — " + String(e));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleReject() {
-    setRequest(prev =>
-      prev ? { ...prev, ApprovalStatus: { Value: "Rejected" },
-        State: { Value: "Cancelled" } } : prev
-    );
-    setSelectedState("Cancelled");
-    setApprovalAction(null);
-    setActionNote("");
-    showSaved();
+  async function handleReject() {
+    setSaving(true);
+    try {
+      const token = await getToken();
+      await updateRequest(
+        request.Id,
+        { ApprovalStatus: "Rejected", State: "Cancelled" },
+        token
+      );
+      setRequest((prev: any) => ({
+        ...prev,
+        ApprovalStatus: "Rejected",
+        State: "Cancelled",
+      }));
+      setSelectedState("Cancelled");
+      setApprovalAction(null);
+      showSaved();
+    } catch (e) {
+      setError("Failed to reject — " + String(e));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  if (!request) {
+  // Loading
+  if (loading) {
     return (
       <div style={{ textAlign: "center", padding: "64px", color: "#9CA3AF" }}>
-        <div style={{ fontSize: "40px", marginBottom: "12px" }}>🔍</div>
-        <div style={{ fontSize: "16px", fontWeight: "500" }}>Request not found</div>
+        <div style={{ fontSize: "32px", marginBottom: "12px" }}>⏳</div>
+        <div style={{ fontSize: "14px" }}>Loading request from SharePoint...</div>
+      </div>
+    );
+  }
+
+  // Error
+  if (error || !request) {
+    return (
+      <div style={{ textAlign: "center", padding: "64px" }}>
+        <div style={{ fontSize: "40px", marginBottom: "12px" }}>❌</div>
+        <div style={{ fontSize: "14px", color: "#E24B4A", marginBottom: "16px" }}>
+          {error || "Request not found"}
+        </div>
         <button onClick={() => navigate("/requests")}
-          style={{ marginTop: "16px", padding: "10px 20px",
-            backgroundColor: "#0078D4", color: "white", border: "none",
-            borderRadius: "8px", cursor: "pointer", fontSize: "13px" }}>
+          style={{ padding: "10px 20px", backgroundColor: "#0078D4",
+            color: "white", border: "none", borderRadius: "8px",
+            cursor: "pointer", fontSize: "13px" }}>
           Back to Requests
         </button>
       </div>
     );
   }
 
-  const approvalColor = getApprovalColor(request.ApprovalStatus.Value);
-  const isPending  = request.ApprovalStatus.Value === "Pending";
-  const isApproved = request.ApprovalStatus.Value === "Approved";
-  const isRejected = request.ApprovalStatus.Value === "Rejected";
+  const approvalVal = getVal(request.ApprovalStatus) || "Pending";
+  const isPending   = approvalVal === "Pending";
+  const isApproved  = approvalVal === "Approved";
+  const isRejected  = approvalVal === "Rejected";
 
   return (
     <div style={{ maxWidth: "860px" }}>
@@ -129,20 +213,22 @@ export default function RequestDetail() {
               color: "#1F2937", margin: 0 }}>
               {request.REQ_Number}
             </h1>
-            {/* Approval badge */}
-            <span style={{ fontSize: "11px", fontWeight: "600", color: "white",
-              backgroundColor: approvalColor, padding: "3px 10px",
-              borderRadius: "20px" }}>
-              {request.ApprovalStatus.Value}
+            <span style={{ fontSize: "11px", fontWeight: "600",
+              color: "white", padding: "3px 10px", borderRadius: "20px",
+              backgroundColor: getApprovalColor(approvalVal) }}>
+              {approvalVal}
             </span>
-            {/* Priority badge */}
-            <span style={{ fontSize: "11px", fontWeight: "600", color: "#6B7280",
-              backgroundColor: "#F3F4F6", padding: "3px 10px", borderRadius: "20px" }}>
-              {request.Priority.Value}
+            <span style={{ fontSize: "11px", fontWeight: "600",
+              color: "#6B7280", backgroundColor: "#F3F4F6",
+              padding: "3px 10px", borderRadius: "20px" }}>
+              {getVal(request.Priority) || "—"}
             </span>
           </div>
           <p style={{ fontSize: "13px", color: "#6B7280", margin: "4px 0 0" }}>
-            {request.RequestType.Value} · Created: {new Date(request.Created).toLocaleDateString()}
+            {getVal(request.RequestType)} · Created:{" "}
+            {new Date(request.Created).toLocaleDateString()}
+            {" · "}
+            <span style={{ color: "#639922" }}>live SharePoint data ✅</span>
           </p>
         </div>
       </div>
@@ -152,7 +238,7 @@ export default function RequestDetail() {
         <div style={{ backgroundColor: "#EAF3DE", border: "1px solid #97C459",
           borderRadius: "8px", padding: "10px 16px", marginBottom: "16px",
           fontSize: "13px", color: "#27500A" }}>
-          ✅ Request updated successfully!
+          ✅ Request updated in SharePoint successfully!
         </div>
       )}
 
@@ -161,7 +247,6 @@ export default function RequestDetail() {
 
         {/* LEFT */}
         <div>
-          {/* Request details card */}
           <div style={{ backgroundColor: "white", borderRadius: "12px",
             padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
             marginBottom: "16px" }}>
@@ -170,11 +255,11 @@ export default function RequestDetail() {
               borderBottom: "1px solid #F3F4F6" }}>
               Request Details
             </h2>
-            <Field label="Title"        value={request.Title} />
-            <Field label="Description"  value={request.Description} />
+            <Field label="Title"       value={request.Title ?? "—"} />
+            <Field label="Description" value={request.Description ?? "—"} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <Field label="Request Type"  value={request.RequestType.Value} />
-              <Field label="Priority"      value={request.Priority.Value} />
+              <Field label="Request Type"  value={getVal(request.RequestType) || "—"} />
+              <Field label="Priority"      value={getVal(request.Priority) || "—"} />
               <Field label="Requested By"  value={request.RequestedBy?.Title ?? "—"} />
               <Field label="Due Date"      value={request.DueDate ?? "—"} />
             </div>
@@ -227,7 +312,8 @@ export default function RequestDetail() {
                       {new Date(note.Created).toLocaleString()}
                     </span>
                   </div>
-                  <div style={{ fontSize: "13px", color: "#374151", lineHeight: "1.5" }}>
+                  <div style={{ fontSize: "13px", color: "#374151",
+                    lineHeight: "1.5" }}>
                     {note.Note}
                   </div>
                 </div>
@@ -236,10 +322,10 @@ export default function RequestDetail() {
           </div>
         </div>
 
-        {/* RIGHT — action panel */}
+        {/* RIGHT */}
         <div>
 
-          {/* Approval action */}
+          {/* Approval decision */}
           {isPending && (
             <div style={{ backgroundColor: "white", borderRadius: "12px",
               padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
@@ -248,9 +334,8 @@ export default function RequestDetail() {
                 color: "#1F2937", marginBottom: "4px" }}>
                 Approval Decision
               </h2>
-              <p style={{ fontSize: "12px", color: "#9CA3AF",
-                marginBottom: "12px" }}>
-                This request is awaiting manager approval
+              <p style={{ fontSize: "12px", color: "#9CA3AF", marginBottom: "12px" }}>
+                Awaiting manager approval
               </p>
 
               {approvalAction === null && (
@@ -281,11 +366,13 @@ export default function RequestDetail() {
                       resize: "none", fontFamily: "inherit",
                       boxSizing: "border-box", outline: "none", marginBottom: "8px" }} />
                   <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={handleApprove}
-                      style={{ flex: 1, padding: "9px", backgroundColor: "#639922",
+                    <button onClick={handleApprove} disabled={saving}
+                      style={{ flex: 1, padding: "9px",
+                        backgroundColor: saving ? "#86EFAC" : "#639922",
                         color: "white", border: "none", borderRadius: "8px",
-                        fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>
-                      ✓ Confirm Approve
+                        fontSize: "12px", fontWeight: "600",
+                        cursor: saving ? "not-allowed" : "pointer" }}>
+                      {saving ? "Saving..." : "✓ Confirm Approve"}
                     </button>
                     <button onClick={() => setApprovalAction(null)}
                       style={{ padding: "9px 12px", backgroundColor: "#F3F4F6",
@@ -308,11 +395,13 @@ export default function RequestDetail() {
                       resize: "none", fontFamily: "inherit",
                       boxSizing: "border-box", outline: "none", marginBottom: "8px" }} />
                   <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={handleReject}
-                      style={{ flex: 1, padding: "9px", backgroundColor: "#E24B4A",
+                    <button onClick={handleReject} disabled={saving}
+                      style={{ flex: 1, padding: "9px",
+                        backgroundColor: saving ? "#FCA5A5" : "#E24B4A",
                         color: "white", border: "none", borderRadius: "8px",
-                        fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>
-                      ✕ Confirm Reject
+                        fontSize: "12px", fontWeight: "600",
+                        cursor: saving ? "not-allowed" : "pointer" }}>
+                      {saving ? "Saving..." : "✕ Confirm Reject"}
                     </button>
                     <button onClick={() => setApprovalAction(null)}
                       style={{ padding: "9px 12px", backgroundColor: "#F3F4F6",
@@ -368,16 +457,17 @@ export default function RequestDetail() {
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
-            <button onClick={handleUpdateState}
+            <button onClick={handleUpdateState} disabled={saving}
               style={{ width: "100%", padding: "10px",
-                backgroundColor: "#0078D4", color: "white", border: "none",
-                borderRadius: "8px", fontSize: "13px",
-                fontWeight: "600", cursor: "pointer" }}>
-              Update State
+                backgroundColor: saving ? "#93C5FD" : "#0078D4",
+                color: "white", border: "none", borderRadius: "8px",
+                fontSize: "13px", fontWeight: "600",
+                cursor: saving ? "not-allowed" : "pointer" }}>
+              {saving ? "Saving..." : "Update State"}
             </button>
           </div>
 
-          {/* Info panel */}
+          {/* Info */}
           <div style={{ backgroundColor: "white", borderRadius: "12px",
             padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
             <h2 style={{ fontSize: "14px", fontWeight: "600",
@@ -385,14 +475,15 @@ export default function RequestDetail() {
               Info
             </h2>
             {[
-              ["Number",       request.REQ_Number],
-              ["Type",         request.RequestType.Value],
-              ["Priority",     request.Priority.Value],
-              ["Approval",     request.ApprovalStatus.Value],
-              ["Created",      new Date(request.Created).toLocaleDateString()],
+              ["Number",   request.REQ_Number ?? "—"],
+              ["Type",     getVal(request.RequestType) || "—"],
+              ["Priority", getVal(request.Priority) || "—"],
+              ["Approval", approvalVal],
+              ["Created",  new Date(request.Created).toLocaleDateString()],
             ].map(([l, v]) => (
               <div key={l} style={{ display: "flex", justifyContent: "space-between",
-                padding: "7px 0", borderBottom: "1px solid #F9FAFB", fontSize: "12px" }}>
+                padding: "7px 0", borderBottom: "1px solid #F9FAFB",
+                fontSize: "12px" }}>
                 <span style={{ color: "#9CA3AF" }}>{l}</span>
                 <span style={{ color: "#1F2937", fontWeight: "500" }}>{v}</span>
               </div>
