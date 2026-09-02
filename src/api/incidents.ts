@@ -43,12 +43,28 @@ async function getDigest(token: string): Promise<string> {
   return data.d.GetContextWebInformation.FormDigestValue;
 }
 
+let cachedEntityType: string | null = null;
+
+async function getEntityType(token: string): Promise<string> {
+  if (cachedEntityType) return cachedEntityType;
+  const res = await fetch(
+    BASE + "/getbytitle('" + LIST_NAMES.incidents + "')?$select=ListItemEntityTypeFullName",
+    { headers: headers(token) }
+  );
+  const data = await res.json();
+  cachedEntityType = data.d.ListItemEntityTypeFullName;
+  return cachedEntityType!;
+}
+
 export async function createIncident(
   payload: Record<string, unknown>,
   token: string
-): Promise<void> {
-  const digest = await getDigest(token);
-  await fetch(
+): Promise<any> {
+  const [digest, entityType] = await Promise.all([
+    getDigest(token),
+    getEntityType(token),
+  ]);
+  const res = await fetch(
     BASE + "/getbytitle('" + LIST_NAMES.incidents + "')/items",
     {
       method: "POST",
@@ -57,11 +73,17 @@ export async function createIncident(
         "X-RequestDigest": digest,
       },
       body: JSON.stringify({
-        "__metadata": { "type": "SP.Data.SNOW_IncidentsListItem" },
+        "__metadata": { "type": entityType },
         ...payload,
       }),
     }
   );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("SharePoint create failed (" + res.status + "): " + errText);
+  }
+  const data = await res.json();
+  return data.d;
 }
 
 export async function updateIncident(
@@ -69,8 +91,11 @@ export async function updateIncident(
   payload: Record<string, unknown>,
   token: string
 ): Promise<void> {
-  const digest = await getDigest(token);
-  await fetch(
+  const [digest, entityType] = await Promise.all([
+    getDigest(token),
+    getEntityType(token),
+  ]);
+  const res = await fetch(
     BASE + "/getbytitle('" + LIST_NAMES.incidents + "')/items(" + id + ")",
     {
       method: "PATCH",
@@ -81,9 +106,13 @@ export async function updateIncident(
         "X-HTTP-Method": "MERGE",
       },
       body: JSON.stringify({
-        "__metadata": { "type": "SP.Data.SNOW_IncidentsListItem" },
+        "__metadata": { "type": entityType },
         ...payload,
       }),
     }
   );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("SharePoint update failed (" + res.status + "): " + errText);
+  }
 }
