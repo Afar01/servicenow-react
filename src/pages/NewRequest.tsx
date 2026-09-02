@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMsal } from "@azure/msal-react";
 import { loginRequest } from "../auth/msalConfig";
-import { getRequests, createRequest } from "../api/requests";
+import { getRequests, createRequest, ensureUser } from "../api/requests";
 
 const REQUEST_TYPES = ["Hardware", "Software", "Access Request", "Account Setup", "Other"];
 const PRIORITIES    = ["1-Critical", "2-High", "3-Medium", "4-Low"];
@@ -54,6 +54,8 @@ export default function NewRequest() {
       }, 0);
       const reqNumber = "REQ-" + String(maxNum + 1).padStart(3, "0");
 
+      const userId = await ensureUser(account.username, token);
+
       const payload: Record<string, unknown> = {
         Title: form.title,
         REQ_Number: reqNumber,
@@ -61,6 +63,7 @@ export default function NewRequest() {
         Priority: form.priority,
         Description: form.description,
         ApprovalStatus: "Pending",
+        RequestedById: userId,
       };
       if (form.dueDate) {
         payload.DueDate = new Date(form.dueDate).toISOString();
