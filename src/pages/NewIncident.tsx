@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMsal } from "@azure/msal-react";
 import { loginRequest } from "../auth/msalConfig";
-import { getIncidents, createIncident } from "../api/incidents";
+import { getIncidents, createIncident, ensureUser } from "../api/incidents";
 
 const CATEGORIES = ["Network", "Hardware", "Software", "Email", "Access", "Other"];
 const PRIORITIES = ["1-Critical", "2-High", "3-Medium", "4-Low"];
@@ -58,7 +58,7 @@ export default function NewIncident() {
       }, 0);
       const incNumber = "INC-" + String(maxNum + 1).padStart(3, "0");
 
-      await createIncident({
+      const payload: Record<string, unknown> = {
         Title: form.title,
         INC_Number: incNumber,
         Category: form.category,
@@ -67,7 +67,14 @@ export default function NewIncident() {
         Impact: form.impact,
         State: "New",
         Description: form.description,
-      }, token);
+      };
+
+      if (form.assignedTo.trim()) {
+        const userId = await ensureUser(form.assignedTo.trim(), token);
+        payload.AssignedToId = userId;
+      }
+
+      await createIncident(payload, token);
 
       setNewINCNumber(incNumber);
       setSubmitted(true);
@@ -210,10 +217,10 @@ export default function NewIncident() {
 
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "12px", fontWeight: "600",
-            color: "#374151", marginBottom: "6px" }}>Assigned To</label>
-          <input type="text" value={form.assignedTo}
+            color: "#374151", marginBottom: "6px" }}>Assigned To (email)</label>
+          <input type="email" value={form.assignedTo}
             onChange={e => set("assignedTo", e.target.value)}
-            placeholder="Agent name (optional) — not yet wired to SharePoint"
+            placeholder="agent@yourcompany.com (optional)"
             style={{ width: "100%", padding: "10px 12px", fontSize: "13px",
               border: "1px solid #E5E7EB", borderRadius: "8px",
               outline: "none", boxSizing: "border-box" }} />
