@@ -18,6 +18,23 @@ async function getDigest(token: string): Promise<string> {
   const data = await res.json();
   return data.d.GetContextWebInformation.FormDigestValue;
 }
+export async function ensureUser(loginName: string, token: string): Promise<number> {
+  const digest = await getDigest(token);
+  const res = await fetch(SITE_URL + "/_api/web/ensureuser", {
+    method: "POST",
+    headers: {
+      ...headers(token),
+      "X-RequestDigest": digest,
+    },
+    body: JSON.stringify({ logonName: loginName }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("Could not resolve user '" + loginName + "' (" + res.status + "): " + errText);
+  }
+  const data = await res.json();
+  return data.d.Id;
+}
 
 let cachedRequestEntityType: string | null = null;
 
