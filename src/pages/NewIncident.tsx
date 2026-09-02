@@ -1,22 +1,17 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MOCK_INCIDENTS } from "../mockData";
+import { useMsal } from "@azure/msal-react";
+import { loginRequest } from "../auth/msalConfig";
+import { getIncidents, createIncident } from "../api/incidents";
 
 const CATEGORIES = ["Network", "Hardware", "Software", "Email", "Access", "Other"];
 const PRIORITIES = ["1-Critical", "2-High", "3-Medium", "4-Low"];
 const URGENCIES  = ["1-High", "2-Medium", "3-Low"];
 const IMPACTS    = ["1-High", "2-Medium", "3-Low"];
 
-function nextINCNumber(): string {
-  const max = MOCK_INCIDENTS.reduce((acc, inc) => {
-    const num = parseInt(inc.INC_Number.replace("INC-", ""), 10);
-    return num > acc ? num : acc;
-  }, 0);
-  return "INC-" + String(max + 1).padStart(3, "0");
-}
-
 export default function NewIncident() {
   const navigate = useNavigate();
+  const { instance, accounts } = useMsal();
 
   const [form, setForm] = useState({
     title:       "",
@@ -30,6 +25,7 @@ export default function NewIncident() {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [newINCNumber, setNewINCNumber] = useState("");
 
@@ -46,15 +42,40 @@ export default function NewIncident() {
     return Object.keys(e).length === 0;
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!validate()) return;
     setSubmitting(true);
-    setTimeout(() => {
-      const incNumber = nextINCNumber();
+    setSubmitError("");
+    try {
+      const account = instance.getActiveAccount() || accounts[0];
+      const response = await instance.acquireTokenSilent({ ...loginRequest, account });
+      const token = response.accessToken;
+
+      const existing = await getIncidents(token);
+      const maxNum = existing.reduce((acc: number, inc: any) => {
+        const n = parseInt((inc.INC_Number || "").replace("INC-", ""), 10);
+        return isNaN(n) ? acc : Math.max(acc, n);
+      }, 0);
+      const incNumber = "INC-" + String(maxNum + 1).padStart(3, "0");
+
+      await createIncident({
+        Title: form.title,
+        INC_Number: incNumber,
+        Category: form.category,
+        Priority: form.priority,
+        Urgency: form.urgency,
+        Impact: form.impact,
+        State: "New",
+        Description: form.description,
+      }, token);
+
       setNewINCNumber(incNumber);
-      setSubmitting(false);
       setSubmitted(true);
-    }, 800);
+    } catch (e) {
+      setSubmitError("Failed to create incident — " + String(e));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
@@ -111,7 +132,7 @@ export default function NewIncident() {
             New Incident
           </h1>
           <p style={{ fontSize: "13px", color: "#6B7280", margin: "4px 0 0" }}>
-            Auto number: <strong>{nextINCNumber()}</strong> · State will be set to <strong>New</strong>
+            INC number auto-generated on submit · State will be set to <strong>New</strong>
           </p>
         </div>
       </div>
@@ -192,7 +213,7 @@ export default function NewIncident() {
             color: "#374151", marginBottom: "6px" }}>Assigned To</label>
           <input type="text" value={form.assignedTo}
             onChange={e => set("assignedTo", e.target.value)}
-            placeholder="Agent name (optional)"
+            placeholder="Agent name (optional) — not yet wired to SharePoint"
             style={{ width: "100%", padding: "10px 12px", fontSize: "13px",
               border: "1px solid #E5E7EB", borderRadius: "8px",
               outline: "none", boxSizing: "border-box" }} />
@@ -218,6 +239,12 @@ export default function NewIncident() {
           )}
         </div>
       </div>
+
+      {submitError && (
+        <div style={{ color: "#E24B4A", fontSize: "12px", marginBottom: "12px" }}>
+          {submitError}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
         <button onClick={() => navigate("/incidents")}
