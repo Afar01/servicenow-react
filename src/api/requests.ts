@@ -18,6 +18,7 @@ async function getDigest(token: string): Promise<string> {
   const data = await res.json();
   return data.d.GetContextWebInformation.FormDigestValue;
 }
+
 export async function ensureUser(loginName: string, token: string): Promise<number> {
   const digest = await getDigest(token);
   const res = await fetch(SITE_URL + "/_api/web/ensureuser", {
