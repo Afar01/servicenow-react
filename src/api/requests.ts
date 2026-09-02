@@ -19,6 +19,19 @@ async function getDigest(token: string): Promise<string> {
   return data.d.GetContextWebInformation.FormDigestValue;
 }
 
+let cachedRequestEntityType: string | null = null;
+
+async function getEntityType(token: string): Promise<string> {
+  if (cachedRequestEntityType) return cachedRequestEntityType;
+  const res = await fetch(
+    BASE + "/getbytitle('" + LIST_NAMES.requests + "')?$select=ListItemEntityTypeFullName",
+    { headers: headers(token) }
+  );
+  const data = await res.json();
+  cachedRequestEntityType = data.d.ListItemEntityTypeFullName;
+  return cachedRequestEntityType!;
+}
+
 export async function getRequests(token: string) {
   const res = await fetch(
     BASE + "/getbytitle('" + LIST_NAMES.requests + "')/items" +
@@ -43,13 +56,46 @@ export async function getRequest(id: number, token: string) {
   return data.d;
 }
 
+export async function createRequest(
+  payload: Record<string, unknown>,
+  token: string
+): Promise<any> {
+  const [digest, entityType] = await Promise.all([
+    getDigest(token),
+    getEntityType(token),
+  ]);
+  const res = await fetch(
+    BASE + "/getbytitle('" + LIST_NAMES.requests + "')/items",
+    {
+      method: "POST",
+      headers: {
+        ...headers(token),
+        "X-RequestDigest": digest,
+      },
+      body: JSON.stringify({
+        "__metadata": { "type": entityType },
+        ...payload,
+      }),
+    }
+  );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("SharePoint create failed (" + res.status + "): " + errText);
+  }
+  const data = await res.json();
+  return data.d;
+}
+
 export async function updateRequest(
   id: number,
   payload: Record<string, unknown>,
   token: string
 ): Promise<void> {
-  const digest = await getDigest(token);
-  await fetch(
+  const [digest, entityType] = await Promise.all([
+    getDigest(token),
+    getEntityType(token),
+  ]);
+  const res = await fetch(
     BASE + "/getbytitle('" + LIST_NAMES.requests + "')/items(" + id + ")",
     {
       method: "PATCH",
@@ -60,30 +106,13 @@ export async function updateRequest(
         "X-HTTP-Method": "MERGE",
       },
       body: JSON.stringify({
-        "__metadata": { "type": "SP.Data.SNOW_RequestsListItem" },
+        "__metadata": { "type": entityType },
         ...payload,
       }),
     }
   );
-}
-
-export async function createRequest(
-  payload: Record<string, unknown>,
-  token: string
-): Promise<void> {
-  const digest = await getDigest(token);
-  await fetch(
-    BASE + "/getbytitle('" + LIST_NAMES.requests + "')/items",
-    {
-      method: "POST",
-      headers: {
-        ...headers(token),
-        "X-RequestDigest": digest,
-      },
-      body: JSON.stringify({
-        "__metadata": { "type": "SP.Data.SNOW_RequestsListItem" },
-        ...payload,
-      }),
-    }
-  );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("SharePoint update failed (" + res.status + "): " + errText);
+  }
 }
