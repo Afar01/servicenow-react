@@ -1,20 +1,15 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MOCK_REQUESTS } from "../mockData";
+import { useMsal } from "@azure/msal-react";
+import { loginRequest } from "../auth/msalConfig";
+import { getRequests, createRequest } from "../api/requests";
 
 const REQUEST_TYPES = ["Hardware", "Software", "Access Request", "Account Setup", "Other"];
 const PRIORITIES    = ["1-Critical", "2-High", "3-Medium", "4-Low"];
 
-function nextREQNumber(): string {
-  const max = MOCK_REQUESTS.reduce((acc, req) => {
-    const num = parseInt(req.REQ_Number.replace("REQ-", ""), 10);
-    return num > acc ? num : acc;
-  }, 0);
-  return "REQ-" + String(max + 1).padStart(3, "0");
-}
-
 export default function NewRequest() {
   const navigate = useNavigate();
+  const { instance, accounts } = useMsal();
 
   const [form, setForm] = useState({
     title:       "",
@@ -24,10 +19,10 @@ export default function NewRequest() {
     requestedFor: "",
     dueDate:     "",
   });
-
-  const [errors,     setErrors]     = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted,  setSubmitted]  = useState(false);
+  const [errors,      setErrors]      = useState<Record<string, string>>({});
+  const [submitting,  setSubmitting]  = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [submitted,   setSubmitted]   = useState(false);
   const [newREQNumber, setNewREQNumber] = useState("");
 
   function set(field: string, value: string) {
@@ -43,15 +38,43 @@ export default function NewRequest() {
     return Object.keys(e).length === 0;
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!validate()) return;
     setSubmitting(true);
-    setTimeout(() => {
-      const reqNumber = nextREQNumber();
+    setSubmitError("");
+    try {
+      const account = instance.getActiveAccount() || accounts[0];
+      const response = await instance.acquireTokenSilent({ ...loginRequest, account });
+      const token = response.accessToken;
+
+      const existing = await getRequests(token);
+      const maxNum = existing.reduce((acc: number, req: any) => {
+        const n = parseInt((req.REQ_Number || "").replace("REQ-", ""), 10);
+        return isNaN(n) ? acc : Math.max(acc, n);
+      }, 0);
+      const reqNumber = "REQ-" + String(maxNum + 1).padStart(3, "0");
+
+      const payload: Record<string, unknown> = {
+        Title: form.title,
+        REQ_Number: reqNumber,
+        RequestType: form.requestType,
+        Priority: form.priority,
+        Description: form.description,
+        ApprovalStatus: "Pending",
+      };
+      if (form.dueDate) {
+        payload.DueDate = new Date(form.dueDate).toISOString();
+      }
+
+      await createRequest(payload, token);
+
       setNewREQNumber(reqNumber);
-      setSubmitting(false);
       setSubmitted(true);
-    }, 800);
+    } catch (e) {
+      setSubmitError("Failed to submit request — " + String(e));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
@@ -103,8 +126,6 @@ export default function NewRequest() {
 
   return (
     <div style={{ maxWidth: "680px" }}>
-
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center",
         gap: "12px", marginBottom: "24px" }}>
         <button onClick={() => navigate("/requests")}
@@ -118,12 +139,11 @@ export default function NewRequest() {
             New Request
           </h1>
           <p style={{ fontSize: "13px", color: "#6B7280", margin: "4px 0 0" }}>
-            Auto number: <strong>{nextREQNumber()}</strong> · Approval status will be <strong>Pending</strong>
+            REQ number auto-generated on submit · Approval status will be <strong>Pending</strong>
           </p>
         </div>
       </div>
 
-      {/* Approval info banner */}
       <div style={{ backgroundColor: "#FAEEDA", border: "1px solid #FAC775",
         borderRadius: "10px", padding: "12px 16px", marginBottom: "16px",
         fontSize: "13px", color: "#633806", display: "flex",
@@ -135,14 +155,12 @@ export default function NewRequest() {
       <div style={{ backgroundColor: "white", borderRadius: "12px",
         boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
         padding: "24px", marginBottom: "16px" }}>
-
         <h2 style={{ fontSize: "14px", fontWeight: "600", color: "#1F2937",
           marginBottom: "20px", paddingBottom: "10px",
           borderBottom: "1px solid #F3F4F6" }}>
           Request Information
         </h2>
 
-        {/* Title */}
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "12px", fontWeight: "600",
             color: "#374151", marginBottom: "6px" }}>
@@ -161,7 +179,6 @@ export default function NewRequest() {
           )}
         </div>
 
-        {/* Request Type + Priority */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr",
           gap: "12px", marginBottom: "16px" }}>
           <div>
@@ -192,7 +209,6 @@ export default function NewRequest() {
           </div>
         </div>
 
-        {/* Requested For + Due Date */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr",
           gap: "12px", marginBottom: "16px" }}>
           <div>
@@ -200,7 +216,7 @@ export default function NewRequest() {
               color: "#374151", marginBottom: "6px" }}>Requested For</label>
             <input type="text" value={form.requestedFor}
               onChange={e => set("requestedFor", e.target.value)}
-              placeholder="Name (if for someone else)"
+              placeholder="Name (if for someone else) — not yet wired to SharePoint"
               style={{ width: "100%", padding: "10px 12px", fontSize: "13px",
                 border: "1px solid #E5E7EB", borderRadius: "8px",
                 outline: "none", boxSizing: "border-box" }} />
@@ -217,7 +233,6 @@ export default function NewRequest() {
           </div>
         </div>
 
-        {/* Description */}
         <div>
           <label style={{ display: "block", fontSize: "12px", fontWeight: "600",
             color: "#374151", marginBottom: "6px" }}>
@@ -239,7 +254,12 @@ export default function NewRequest() {
         </div>
       </div>
 
-      {/* Submit row */}
+      {submitError && (
+        <div style={{ color: "#E24B4A", fontSize: "12px", marginBottom: "12px" }}>
+          {submitError}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
         <button onClick={() => navigate("/requests")}
           style={{ padding: "10px 24px", backgroundColor: "white",
@@ -257,7 +277,6 @@ export default function NewRequest() {
           {submitting ? "Submitting..." : "Submit Request"}
         </button>
       </div>
-
     </div>
   );
 }
